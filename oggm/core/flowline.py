@@ -5124,8 +5124,8 @@ class IceflowJuliaModel(object):
         t_end = float((y1-self.y0) * SEC_IN_YEAR)
 
         #Julia solver parameters
-        solver = jl.RDPK3SpFSAL510() #solver
-        reltol = 1e-5 #relative tolerance for the solver
+        solver = cfg.PARAMS['Julia_solver'] #jl.RDPK3SpFSAL510() #solver
+        reltol = cfg.PARAMS['Julia_solver_reltol'] #relative tolerance for the solver
 
         #Need to use integer to pass to the julia function
         do_geom_jl=0
@@ -5135,11 +5135,9 @@ class IceflowJuliaModel(object):
         if do_fl_diag:
             do_fl_diag_jl = 1    
 
-        
-        s_jl = w_jl = b_jl = thick_fl = vol_bsl_fl = vol_bwl_fl = None
 
         #Here is the model run 
-        self, diag_ds_jl,s_jl,w_jl,b_jl,thick_fl,vol_bsl_fl,vol_bwl_fl = jl.glacier_evolution_store(SIA_1D=self,   
+        self, diag_ds_jl,geom_var,fl_var = jl.glacier_evolution_store(SIA_1D=self,   
                                                                                      solver=solver,
                                                                                      reltol=reltol,
                                                                                      y0 = int(y0),
@@ -5157,9 +5155,9 @@ class IceflowJuliaModel(object):
         #Updating geometry of fl diagnostic datasets
         if (do_geom or do_fl_diag):
             #converting the julia outputs to the right format
-            s_jl=list(s_jl) 
-            w_jl =list(w_jl)
-            b_jl = list(b_jl)
+            s_jl=list(geom_var.sects) 
+            w_jl =list(geom_var.widths)
+            b_jl = list(geom_var.buckets)
 
             for s,w,b in zip(s_jl,w_jl,b_jl):
                 s=np.array(s)
@@ -5171,9 +5169,9 @@ class IceflowJuliaModel(object):
             buckets = b_jl
 
             if do_fl_diag:
-                thick_fl = list(thick_fl)
-                vol_bsl_fl = list(vol_bsl_fl)
-                vol_bwl_fl = list(vol_bwl_fl)
+                thick_fl = list(fl_var.thick_fl)
+                vol_bsl_fl = list(fl_var.volume_bsl_fl)
+                vol_bwl_fl = list(fl_var.volume_bwl_fl)
 
                 for fl_id, (ds, fl) in enumerate(zip(fl_diag_dss, self.fls)):
                     thick_fl[fl_id] = np.array(thick_fl[fl_id])
@@ -5198,24 +5196,24 @@ class IceflowJuliaModel(object):
                             var = self.u_stag(thick_fl[fl_id][k,:])
                             val = (var[1:fl.nx + 1] + var[:fl.nx]) / 2 * self._surf_vel_fac
                             ds['ice_velocity_myr'].data[k, :] = val * cfg.SEC_IN_YEAR
-                    
+
         # Updating the diagnostics dataset
         if 'volume' in ovars:
-            diag_ds['volume_m3'].data = np.array(diag_ds_jl["volume_m3"])
+            diag_ds['volume_m3'].data = np.array(diag_ds_jl.volume_m3)
         if 'area' in ovars:
-            diag_ds['area_m2'].data = np.array(diag_ds_jl["area_m2"])
+            diag_ds['area_m2'].data = np.array(diag_ds_jl.area_m2)
         if 'length' in ovars:
-            diag_ds['length_m'].data = np.array(diag_ds_jl["length_m"])
+            diag_ds['length_m'].data = np.array(diag_ds_jl.length_m)
         if 'calving' in ovars:
-            diag_ds['calving_m3'].data = np.array(diag_ds_jl["calving_m3"])
+            diag_ds['calving_m3'].data = np.array(diag_ds_jl.calving_m3)
         if 'calving_rate' in ovars:
-            diag_ds['calving_rate_myr'].data = np.array(diag_ds_jl["calving_rate_myr"])
+            diag_ds['calving_rate_myr'].data = np.array(diag_ds_jl.calving_rate_myr)
         if 'volume_bsl' in ovars:
-            diag_ds['volume_bsl_m3'].data = np.array(diag_ds_jl["volume_bsl_m3"])
+            diag_ds['volume_bsl_m3'].data = np.array(diag_ds_jl.volume_bsl_m3)
         if 'volume_bwl' in ovars:
-            diag_ds['volume_bwl_m3'].data = np.array(diag_ds_jl["volume_bwl_m3"])
+            diag_ds['volume_bwl_m3'].data = np.array(diag_ds_jl.volume_bwl_m3)
         if 'area_min_h' in ovars:
-            diag_ds['area_m2_min_h'].data = np.array(diag_ds_jl["area_m2_min_h"])
+            diag_ds['area_m2_min_h'].data = np.array(diag_ds_jl.area_m2_min_h)
 
         # Terminus thick is a bit more logic
         ti = None
