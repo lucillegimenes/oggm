@@ -60,7 +60,7 @@ jl.seval("using Statistics")
 jl.seval("using LinearAlgebra")
 jl.seval("using AxisArrays")
 
-jl.include("/home/gimenelu/oggm/oggm/core/SIA_1D.jl")
+jl.include("/home/gimenelu/oggm/oggm/core/SIA1D_utils.jl")
 
 
 class Flowline(Centerline):
@@ -3055,8 +3055,8 @@ def decide_evolution_model(evolution_model=None):
     elif from_cfg == 'MassRedistributionCurve'.lower():
         evolution_model = MassRedistributionCurveModel
 
-    elif from_cfg == 'SIA_1D'.lower():
-        evolution_model = SIA_1D
+    elif from_cfg == 'SIA1D'.lower():
+        evolution_model = SIA1D
     else:
         raise InvalidParamsError("PARAMS['evolution_model'] not recognized"
                                  f": {from_cfg}.")
@@ -4785,7 +4785,7 @@ class IceflowJuliaModel(object):
         solver = jl.RDPK3SpFSAL510() #solver
         reltol = 1e-8 #relative tolerance for the solver
 
-        self = jl.glacier_evolution(SIA_1D=self,solver=solver,reltol=reltol,y0=int(self.y0),y1=int(y1))
+        self = jl.glacier_evolution(SIA1D=self,solver=solver,reltol=reltol,y0=int(self.y0),y1=int(y1))
 
         t_end = float((y1-self.y0) * SEC_IN_YEAR)
         self.t = t_end
@@ -5137,7 +5137,7 @@ class IceflowJuliaModel(object):
 
 
         #Here is the model run 
-        self, diag_ds_jl,geom_var,fl_var = jl.glacier_evolution_store(SIA_1D=self,   
+        self, diag_ds_jl,geom_var,fl_var = jl.glacier_evolution_store(SIA1D=self,   
                                                                                      solver=solver,
                                                                                      reltol=reltol,
                                                                                      y0 = int(y0),
@@ -5367,7 +5367,7 @@ def flux_gate_with_build_up(year, flux_value=None, flux_gate_yr=None):
     return flux_value * utils.clip_scalar(fac, 0, 1)        
 
 
-class SIA_1D(IceflowJuliaModel):
+class SIA1D(IceflowJuliaModel):
     """
     1D SIA flowline model for Julia (Reproduction of the SemiImplicitModel class, but with less properties and without the step method implemented)
 
@@ -5467,14 +5467,14 @@ class SIA_1D(IceflowJuliaModel):
             the same as used for the inversion (this is what
             `flowline_model_run` does for you)
         """
-        super(SIA_1D, self).__init__(flowlines, mb_model=mb_model,
+        super(SIA1D, self).__init__(flowlines, mb_model=mb_model,
                                              y0=y0, glen_a=glen_a, fs=fs,
                                              inplace=inplace,
                                              water_level=water_level,
                                              **kwargs)
 
         if len(self.fls) > 1:
-            raise ValueError('SIA_1D model does not work with '
+            raise ValueError('SIA1D model does not work with '
                              'tributaries.')
 
         # convert pure RectangularBedFlowline to TrapezoidalBedFlowline with
@@ -5489,19 +5489,19 @@ class SIA_1D(IceflowJuliaModel):
 
         if isinstance(self.fls[0], MixedBedFlowline):
             if ~np.all(self.fls[0].is_trapezoid):
-                raise ValueError('SIA_1D only works with a pure '
+                raise ValueError('SIA1D only works with a pure '
                                  'trapezoidal flowline! But different lambdas '
                                  'along the flowline possible (lambda=0 is'
                                  'rectangular).')
         elif not isinstance(self.fls[0], TrapezoidalBedFlowline):
-            raise ValueError('SIA_1D only works with a pure '
+            raise ValueError('SIA1D only works with a pure '
                              'trapezoidal flowline! But different lambdas '
                              'along the flowline possible (lambda=0 is'
                              'rectangular).')
 
         if cfg.PARAMS['use_kcalving_for_run']:
             raise NotImplementedError("Calving is not implemented in the"
-                                      "SIA_1D! Set "
+                                      "SIA1D! Set "
                                       "cfg.PARAMS['use_kcalving_for_run'] = "
                                       "False or use a FluxBasedModel.")
         
