@@ -4,6 +4,8 @@ diff_x!(O, I, Δx) = @views @. O = (I[2:end] - I[1:end - 1])./ Δx
 avg!(O, I) = @views @. O = (I[2:end] + I[1:end - 1])./2.0
 
 include("SIA1D.jl")
+using LinearSolve
+
 
 """
 SIA1D!(dH, H, SIA1Dmodel,t)
@@ -11,29 +13,30 @@ SIA1D!(dH, H, SIA1Dmodel,t)
 Compute an in-place step of the Shallow Ice Approximation PDE in a forward model
 """
 
-function SIA1D!(dH::Vector{Float64}, H::Vector{Float64}, iceflow_model::SIA1Dmodel, t::Float64)
+function SIA1D!(dH, H, iceflow_model, t) #where {F <: AbstractFloat, I <: Integer}
     # Retrieve model parameters
-    Δx::Int64 = iceflow_model.Δx
-    Γ::Float64 = iceflow_model.Γ
-    Γs::Float64 = iceflow_model.Γs
-    dSdx::Vector{Float64}= iceflow_model.dSdx
-    ∇Sx::Vector{Float64} = iceflow_model.∇Sx
-    w::Vector{Float64} = iceflow_model.w 
-    w̅ ::Vector{Float64} = iceflow_model.w̅
-    w0::Vector{Float64} = iceflow_model.w0
-    w0_stag::Vector{Float64} = iceflow_model.w0_stag
-    λ::Vector{Float64} = iceflow_model.λ
-    S::Vector{Float64} = iceflow_model.S
-    B::Vector{Float64} = iceflow_model.B
-    H̅::Vector{Float64} = iceflow_model.H̅
-    D::Vector{Float64} = iceflow_model.D
-    Fx::Vector{Float64} = iceflow_model.Fx 
-    Fxx::Vector{Float64} = iceflow_model.Fxx
+    Δx = iceflow_model.Δx
+    Γ = iceflow_model.Γ
+    Γs = iceflow_model.Γs
+    dSdx = iceflow_model.dSdx
+    ∇Sx = iceflow_model.∇Sx
+    w = iceflow_model.w 
+    w̅ = iceflow_model.w̅
+    w0 = iceflow_model.w0
+    w0_stag = iceflow_model.w0_stag
+    λ = iceflow_model.λ
+    S = iceflow_model.S
+    Sexp = iceflow_model.Sexp
+    B = iceflow_model.B
+    H̅ = iceflow_model.H̅
+    D = iceflow_model.D
+    Fx = iceflow_model.Fx 
+    Fxx = iceflow_model.Fxx
 
 
     # First, enforce values to be positive
     map!(x -> ifelse(x>0.0,x,0.0), H, H)
-
+    
     @. S = B + H
     @. w = w0 + (λ* H)
 
@@ -49,12 +52,15 @@ function SIA1D!(dH::Vector{Float64}, H::Vector{Float64}, iceflow_model::SIA1Dmod
     # Diffusivity
     @views @. D[2:end-1] = ((dSdx^2.0)^((n-1)/2.0)) * ((w̅ + w0_stag)/2.0) * (Γ * H̅^(n.+2) + Γs*(H̅^n))
 
-    append!(S,S[end])
-    prepend!(S,S[1])
 
-    diff_x!(∇Sx,S,Δx)
+    @views @. Sexp[2:end-1] = S
+    Sexp[1] = S[1]
+    Sexp[end] = S[end]
 
-    @. Fx = -D * ∇Sx
+    diff_x!(∇Sx,Sexp,Δx)
+    
+    @. Fx = -D * ∇Sx 
+
     diff_x!(Fxx,Fx,Δx)
 
     dH .=  .-Fxx./w
@@ -62,9 +68,6 @@ function SIA1D!(dH::Vector{Float64}, H::Vector{Float64}, iceflow_model::SIA1Dmod
     # Clip negative ice thickness values
     #@views H[H.<0.0] .= 0.0
     @assert H[end] .< 10.0 "Glacier exceeding boundaries! at time $(t/sec_in_year)"
-
-    popfirst!(S)  #Useful for calculation at the beginning of the function 
-    pop!(S)
 
 end
 
@@ -77,34 +80,38 @@ This function runs the model for the time difference y1-self.y0 and stores diagn
 
 function glacier_evolution_store(;SIA1D::Py, 
                                 solver, 
-                                reltol::Float64,
-                                y0::Int64, 
-                                y1::Int64, 
+                                reltol::F,
+                                y0::I, 
+                                y1::I, 
                                 l_var::PyList{Any}, 
-                                do_geom::Int64, 
-                                do_fl_diag::Int64,
+                                do_geom::I, 
+                                do_fl_diag::I,
                                 mb_step::String,
-                                dyn_spin_thick::Float64)
+                                dyn_spin_thick::F) where {F <: AbstractFloat, I <: Integer}
 
     # Initialize SIA1D model with variables from current flowline 
     iceflow_model::SIA1Dmodel = SIA1Dmodel()
     initialize_iceflow_model!(iceflow_model, SIA1D)
 
     #Time parameters 
-
     sim_params::SimulationParameters = SimulationParameters()
     initialize_sim_params!(sim_params, SIA1D, y0, y1, mb_step)
 
-
+    
     #### Initialize necessary storage structs     
     #Diagnostic
-    diag_jl::diag = diag(sim_params.nₜm,sim_params.fact_m,sim_params.diff, SIA1D,l_var,dyn_spin_thick)
+    diag_jl::diag = diag()
+    initialize_diag!(diag_jl,sim_params.nₜm,sim_params.fact_m,
+                    sim_params.diff, SIA1D,l_var,dyn_spin_thick)
 
     ##Geometry and flowline diagnostic
     do_geom = Bool(do_geom)
     do_fl_diag = Bool(do_fl_diag)
     is_tidewater = pyconvert(Bool,SIA1D.is_tidewater)
-    geom_var::geom, fl_var::fl_diag = geom_fl(do_geom,do_fl_diag,sim_params.nₜ,iceflow_model.nx,SIA1D,sim_params.diff,is_tidewater)
+    geom_var::geom = geom()
+    fl_var::fl_diag = fl_diag()
+    initialize_geom_diag!(geom_var,fl_var,do_geom,do_fl_diag,
+                        sim_params.nₜ,iceflow_model.nx, SIA1D,sim_params.diff, is_tidewater)
 
 
     #Callback functions for the mass balance and update the SIA1D object 
@@ -116,7 +123,8 @@ function glacier_evolution_store(;SIA1D::Py,
         #Adding the mass balance at each time stops
         sim_params.yr = sim_params.y₀slf + ((integrator.t - sec_in_month)/sec_in_year)
         
-        get_mb!(iceflow_model.mb, iceflow_model.B .+ integrator.u ,sim_params.yr,SIA1D)
+        get_mb!(iceflow_model,integrator.u,sim_params, SIA1D)
+            
         integrator.u .+= (iceflow_model.mb .* sec_in_month)
         integrator.u[integrator.u.<0.0] .= 0.0
 
@@ -161,14 +169,17 @@ function glacier_evolution_store(;SIA1D::Py,
             end 
         end 
 
+
     end   
 
     #Defining the callback
     cb_MB = DiscreteCallback(stop_condition, action!)
 
+    
     #Solving the problem         
     iceflow_prob = ODEProblem(SIA1D!,iceflow_model.H,sim_params.tspan,tstops=tstops,iceflow_model)
-    iceflow_sol = solve(iceflow_prob,solver,callback=cb_MB, tstops=tstops, reltol=reltol,save_everystep=false,dense=false)
+
+    solve(iceflow_prob, solver,callback=cb_MB, tstops=tstops, reltol=reltol,save_everystep=false,dense=false)
 
     return SIA1D,diag_jl, geom_var, fl_var
     
@@ -180,9 +191,9 @@ end
 function glacier_evolution(;
     SIA1D::Py, #IceflowJuliaModel object
     solver, #Solver to use
-    reltol::Float64, #Relative tolerance
-    y0::Int64, #starting year of the simulation
-    y1::Int64) #ending year of the simulation
+    reltol::F, #Relative tolerance
+    y0::I, #starting year of the simulation
+    y1::I) where {F <: AbstractFloat, I <: Integer} #ending year of the simulation
 
     mb_step::String ="annual"
 
@@ -191,7 +202,6 @@ function glacier_evolution(;
     initialize_iceflow_model!(iceflow_model, SIA1D)
     
     #Time parameters 
-    
     sim_params::SimulationParameters = SimulationParameters()
     initialize_sim_params!(sim_params, SIA1D, y0, y1, mb_step)
 
@@ -203,7 +213,7 @@ function glacier_evolution(;
     #To be called during the callbacks
     function action!(integrator)
         sim_params.yr = sim_params.y₀slf + ((integrator.t - sec_in_month)/sec_in_year)
-        get_mb!(iceflow_model.mb, iceflow_model.B .+ integrator.u, sim_params.yr, SIA1D)
+        get_mb!(iceflow_model,integrator.u,sim_params, SIA1D)
         integrator.u .+= (iceflow_model.mb .* sec_in_month)
         integrator.u[integrator.u.<0.0] .= 0.0
 
@@ -225,13 +235,20 @@ function glacier_evolution(;
 end
 
 
-
-
 ##### CALLBACK FUNCTIONS #####
-
+#=
 function get_mb!(mb::Vector{Float64}, heights::Vector{Float64},y::Float64,SIA1D::Py)
     mb .= pyconvert(Vector{Float64},SIA1D.get_mb(heights,y,fl_id=0))     
 end
+=#
+
+function get_mb!(iceflow_model::SIA1Dmodel{F,I},
+                 H::Vector{F}, 
+                 sim_params::SimulationParameters{F,I},
+                 SIA1D::Py) where {F <: AbstractFloat, I <: Integer}
+
+    iceflow_model.mb .= pyconvert(Vector{F}, SIA1D.get_mb(iceflow_model.B + H, sim_params.yr,fl_id=0))                
+end 
 
 function define_callback_steps(tspan::Tuple)
     step = sec_in_month

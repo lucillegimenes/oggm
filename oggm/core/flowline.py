@@ -59,6 +59,9 @@ jl.seval("using OrdinaryDiffEq")
 jl.seval("using Statistics")
 jl.seval("using LinearAlgebra")
 jl.seval("using AxisArrays")
+jl.seval("using Symbolics")
+jl.seval("using SparseArrays")
+jl.seval("using LinearSolve")
 
 jl.include("/home/gimenelu/oggm/oggm/core/SIA1D_utils.jl")
 
@@ -5193,7 +5196,7 @@ class IceflowJuliaModel(object):
                     if 'ice_velocity' in ovars_fl:
                         for k in range(1,ny):
                             # Velocity can only be computed with dynamics
-                            var = self.u_stag(thick_fl[fl_id][k,:])
+                            var = self.u_stag(thick_fl[fl_id][k,:])[0]
                             val = (var[1:fl.nx + 1] + var[:fl.nx]) / 2 * self._surf_vel_fac
                             ds['ice_velocity_myr'].data[k, :] = val * cfg.SEC_IN_YEAR
 
@@ -5484,7 +5487,7 @@ class SIA1D(IceflowJuliaModel):
                 line=self.fls[-1].line, dx=self.fls[-1].dx,
                 map_dx=self.fls[-1].map_dx, surface_h=self.fls[-1].surface_h,
                 bed_h=self.fls[-1].bed_h, widths=self.fls[-1].widths,
-                lambdas=0, rgi_id=self.fls[-1].rgi_id,
+                lambdas=np.zeros(self.fls[-1].nx), rgi_id=self.fls[-1].rgi_id,
                 water_level=self.fls[-1].water_level, gdir=None)
 
         if isinstance(self.fls[0], MixedBedFlowline):
@@ -5509,23 +5512,87 @@ class SIA1D(IceflowJuliaModel):
         self._surf_vel_fac = (self.glen_n + 2) / (self.glen_n + 1)
         self.rhog = (self.rho * G) ** self.glen_n
 
-        self._u_stag = np.zeros(nx + 1)
-        self._thick_stag = np.zeros(nx + 1)
-        self._slope_stag = np.zeros(nx + 1)
+        self._u_stag = [np.zeros(nx + 1)]
+        self._flux_stag = [np.zeros(nx + 1)]
+        self._thick_stag = [np.zeros(nx + 1)]
+        self._slope_stag = [np.zeros(nx + 1)]
+        self._section_stag = [np.zeros(nx + 1)]
+
+    @property
+    def slope_stag(self):
+        slope_stag = self._slope_stag[0]
+
+        surface_h = self.fls[0].surface_h
+        dx = self.fls[0].dx_meter
+
+        slope_stag[0] = 0
+        slope_stag[1:-1] = (surface_h[0:-1] - surface_h[1:]) / dx
+        slope_stag[-1] = slope_stag[-2]
+
+        return [slope_stag]
+
+    @property
+    def thick_stag(self):
+        thick_stag = self._thick_stag[0]
+
+        thick = self.fls[0].thick
+
+        thick_stag[1:-1] = (thick[0:-1] + thick[1:]) / 2.
+        thick_stag[[0, -1]] = thick[[0, -1]]
+
+        return [thick_stag]
+
+    @property
+    def section_stag(self):
+        section_stag = self._section_stag[0]
+
+        section = self.fls[0].section
+
+        section_stag[1:-1] = (section[0:-1] + section[1:]) / 2.
+        section_stag[[0, -1]] = section[[0, -1]]
+
+        return [section_stag]
+
+    @property
+    def u_stag(self):
+        u_stag = self._u_stag[0]
+
+        slope_stag = self.slope_stag[0]
+        thick_stag = self.thick_stag[0]
+        N = self.glen_n
+        rhog = self.rhog
+
+        rhogh = rhog * slope_stag ** N
+
+        u_stag[:] = ((thick_stag**(N+1)) * self._fd * rhogh +
+                     (thick_stag**(N-1)) * self.fs * rhogh)
+
+        return [u_stag]
+
+    @property
+    def flux_stag(self):
+        flux_stag = self._flux_stag[0]
+
+        section_stag = self.section_stag[0]
+        u_stag = self.u_stag[0]
+
+        flux_stag[:] = u_stag * section_stag
+
+        return [flux_stag]
         
     def u_stag(self,thick_fl):
-        u_stag = self._u_stag
+        u_stag = self._u_stag[0]
         dx = self.fls[0].dx_meter
 
         #Staggered slope computation 
-        slope_stag = self._slope_stag
+        slope_stag = self._slope_stag[0]
         surface_h = self.fls[0].bed_h + thick_fl
         slope_stag[0] = 0
         slope_stag[1:-1] = (surface_h[0:-1] - surface_h[1:]) / dx
         slope_stag[-1] = slope_stag[-2]
 
         #Staggered thickness computation
-        thick_stag = self._thick_stag
+        thick_stag = self._thick_stag[0]
         thick = thick_fl
         thick_stag[1:-1] = (thick[0:-1] + thick[1:]) / 2.
         thick_stag[[0, -1]] = thick[[0, -1]]
@@ -5539,7 +5606,7 @@ class SIA1D(IceflowJuliaModel):
         u_stag[:] = ((thick_stag**(N+1)) * self._fd * rhogh +
                      (thick_stag**(N-1)) * self.fs * rhogh)
 
-        return u_stag
+        return [u_stag]
     
     
     def step(self, dt):

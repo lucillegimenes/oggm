@@ -1,5 +1,5 @@
 np=pyimport("numpy")
-
+using PreallocationTools
 
 #Constants definition
 const sec_in_day = 24.0 * 60.0 * 60.0
@@ -27,8 +27,9 @@ mutable struct SIA1Dmodel{F <: AbstractFloat, I <: Integer}
     w0::Union{Vector{F}, Nothing}
     w0_stag::Union{Vector{F}, Nothing}
     λ::Union{Vector{F}, Nothing}
-    S::Union{Vector{F}, Nothing}
-    B::Union{Vector{F}, Nothing}
+    S::Union{Vector{F}, Nothing} #Union{DiffCache{Vector{F},Vector{F}}, Nothing}
+    Sexp::Union{Vector{F}, Nothing}
+    B::Union{Vector{F}, Nothing} #Union{DiffCache{Vector{F},Vector{F}}, Nothing}
     dSdx::Union{Vector{F}, Nothing}
     ∇Sx::Union{Vector{F}, Nothing}
     D::Union{Vector{F}, Nothing}
@@ -51,7 +52,8 @@ function SIA1Dmodel(
     w0::Union{Vector{F}, Nothing} = nothing, 
     w0_stag::Union{Vector{F}, Nothing} = nothing, 
     λ::Union{Vector{F}, Nothing} = nothing,
-    S::Union{Vector{F}, Nothing} = nothing, 
+    S::Union{Vector{F}, Nothing} = nothing,
+    Sexp::Union{Vector{F}, Nothing}=nothing, 
     B::Union{Vector{F}, Nothing} = nothing, 
     dSdx::Union{Vector{F}, Nothing} = nothing, 
     ∇Sx::Union{Vector{F}, Nothing} = nothing, 
@@ -60,67 +62,94 @@ function SIA1Dmodel(
     Fxx::Union{Vector{F}, Nothing}= nothing,
     mb::Union{Vector{F}, Nothing}= nothing) where {F <: AbstractFloat, I <: Integer}
 
-    SIA1D_model = SIA1Dmodel{Float64,Int64}(nx, A, Γ, Γs, Δx, H, H̅, w, w̅, w0, w0_stag, λ, S, B, dSdx, ∇Sx, D, Fx, Fxx, mb)
+    SIA1D_model = SIA1Dmodel{Float64,Int64}(nx, A, Γ, Γs, Δx, H, H̅, w, w̅, w0, w0_stag,
+     λ, S, Sexp, B, dSdx, ∇Sx, D, Fx, Fxx, mb)
 
     return SIA1D_model
 end
 
-function initialize_iceflow_model!(iceflow_model::SIA1Dmodel, SIA1D::Py)
+function initialize_iceflow_model!(iceflow_model::SIA1Dmodel{F, I}, SIA1D::Py) where {F <: AbstractFloat, I <: Integer}
     fl = SIA1D.fls[0]
-    nx = pyconvert(Int64,fl.nx)
-    iceflow_model.nx = pyconvert(Int64,fl.nx)
-    iceflow_model.A = pyconvert(Float64,SIA1D.glen_a)
-    iceflow_model.Γs = pyconvert(Float64,SIA1D.fs)*((ρ .* g).^n)
+    nx = pyconvert(I,fl.nx)
+    iceflow_model.nx = pyconvert(I,fl.nx)
+    iceflow_model.A = pyconvert(F,SIA1D.glen_a)
+    iceflow_model.Γs = pyconvert(F,SIA1D.fs)*((ρ .* g).^n)
     iceflow_model.Γ = ((2.0 * iceflow_model.A * ((ρ .* g).^n) )/(n + 2.0))
-    iceflow_model.Δx = pyconvert(Int64,fl.dx_meter)
-    iceflow_model.H = pyconvert(Vector{Float64},fl.thick)
-    iceflow_model.H̅ = zeros(Float64,nx-1)
-    iceflow_model.w = pyconvert(Vector{Float64},fl.widths_m)
-    iceflow_model.w̅ = zeros(Float64, nx-1)
-    iceflow_model.w0 = pyconvert(Vector{Float64},fl._w0_m)
-    iceflow_model.w0_stag = zeros(Float64, nx-1)
+    iceflow_model.Δx = pyconvert(I,fl.dx_meter)
+    iceflow_model.H = pyconvert(Vector{F},fl.thick)
+    iceflow_model.H̅ = zeros(F,nx-1)
+    iceflow_model.w = pyconvert(Vector{F},fl.widths_m)
+    iceflow_model.w̅ = zeros(F, nx-1)
+    iceflow_model.w0 = pyconvert(Vector{F},fl._w0_m)
+    iceflow_model.w0_stag = zeros(F, nx-1)
     avg!(iceflow_model.w0_stag, iceflow_model.w0)
-    iceflow_model.λ = pyconvert(Vector{Float64},fl._lambdas)
-    iceflow_model.S = pyconvert(Vector{Float64},fl.surface_h)
-    iceflow_model.B = pyconvert(Vector{Float64},fl.bed_h)
-    iceflow_model.dSdx = zeros(Float64, nx-1)
-    iceflow_model.∇Sx = zeros(Float64, nx + 1)
-    iceflow_model.D = zeros(Float64, nx + 1)
-    iceflow_model.Fx = zeros(Float64,nx + 1)
-    iceflow_model.Fxx = zeros(Float64,nx)
-    iceflow_model.mb = zeros(Float64,nx)
+    iceflow_model.λ = pyconvert(Vector{F},fl._lambdas)
+    iceflow_model.S = pyconvert(Vector{F},fl.surface_h)
+    iceflow_model.Sexp = zeros(F,nx + 2)
+    iceflow_model.B = pyconvert(Vector{F},fl.bed_h)
+    iceflow_model.dSdx = zeros(F, nx-1)
+    iceflow_model.∇Sx = zeros(F, nx + 1)
+    iceflow_model.D = zeros(F, nx + 1)
+    iceflow_model.Fx = zeros(F,nx + 1)
+    iceflow_model.Fxx = zeros(F,nx)
+    iceflow_model.mb = zeros(F,nx)
 end
 
 ###############################################
 ######    VARIABLE STORAGE FOR OGGM     #######
 ###############################################
 
-mutable struct diag
-    volume_m3::Vector{Union{Float64,Py}}
-    area_m2::Vector{Union{Float64,Py}}
-    length_m::Vector{Union{Float64,Py}}
-    calving_m3::Vector{Union{Float64,Py}}
-    calving_rate_myr::Vector{Union{Float64,Py}}
-    volume_bsl_m3::Vector{Union{Float64,Py}}
-    volume_bwl_m3::Vector{Union{Float64,Py}}
-    area_m2_min_h::Vector{Union{Float64,Py}}
+mutable struct diag{F <: AbstractFloat}
+    volume_m3::Union{Vector{Union{F,Py}}, Nothing}
+    area_m2::Union{Vector{Union{F,Py}}, Nothing}
+    length_m::Union{Vector{Union{F,Py}}, Nothing}
+    calving_m3::Union{Vector{Union{F,Py}}, Nothing}
+    calving_rate_myr::Union{Vector{Union{F,Py}}, Nothing}
+    volume_bsl_m3::Union{Vector{Union{F,Py}}, Nothing}
+    volume_bwl_m3::Union{Vector{Union{F,Py}}, Nothing}
+    area_m2_min_h::Union{Vector{Union{F,Py}}, Nothing}
 end
 
-mutable struct geom
-    sects::Vector{Matrix{Union{Float64,Py}}}
-    widths::Vector{Matrix{Union{Float64,Py}}}
-    buckets::Vector{Vector{Union{Float64,Py}}}
+mutable struct geom{F <: AbstractFloat}
+    sects::Union{Vector{Matrix{Union{F,Py}}}, Nothing}
+    widths::Union{Vector{Matrix{Union{F,Py}}}, Nothing}
+    buckets::Union{Vector{Vector{Union{F,Py}}}, Nothing} 
 end 
 
-mutable struct fl_diag
-    thick_fl::Vector{Matrix{Union{Float64,Py}}} 
-    volume_bsl_fl::Vector{Vector{Union{Float64,Py}}} 
-    volume_bwl_fl::Vector{Vector{Union{Float64,Py}}}
+mutable struct fl_diag{F <: AbstractFloat, I <: Integer}
+    thick_fl::Union{Vector{Matrix{Union{F,Py}}}, Nothing}
+    volume_bsl_fl::Union{Vector{Vector{Union{F,Py}}}, Nothing} 
+    volume_bwl_fl::Union{Vector{Vector{Union{F,Py}}}, Nothing} 
 end 
 
-function diag(nₜm::Int64,fac::Int64,diff::Int64, SIA1D::Py,l_var::PyList{Any},dyn_spin_thick::Float64)
-    v = Vector{Float64}(zeros(nₜm))
-    diag_jl = diag(v,v,v,v,v,v,v,v)
+function diag(volume_m3::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    area_m2::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    length_m::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    calving_m3::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    calving_rate_myr::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    volume_bsl_m3::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    volume_bwl_m3::Union{Vector{Union{F,Py}}, Nothing} = nothing,
+    area_m2_min_h::Union{Vector{Union{F,Py}}, Nothing} = nothing) where {F <: AbstractFloat}
+
+    diag_jl = diag{Float64}(volume_m3,area_m2,length_m,calving_m3,calving_rate_myr,
+                                volume_bsl_m3, volume_bwl_m3, area_m2_min_h)
+    return diag_jl
+
+end 
+
+function initialize_diag!(diag_jl::diag{F},nₜm::I,fac::I,
+                            diff::I, SIA1D::Py,l_var::PyList{Any},
+                            dyn_spin_thick::F) where {F <: AbstractFloat, I <: Integer}
+    
+    diag_jl.volume_m3 = Vector{F}(zeros(nₜm))
+    diag_jl.area_m2 = Vector{F}(zeros(nₜm))
+    diag_jl.length_m = Vector{F}(zeros(nₜm))
+    diag_jl.calving_m3 = Vector{F}(zeros(nₜm))
+    diag_jl.calving_rate_myr = Vector{F}(zeros(nₜm))
+    diag_jl.volume_bsl_m3 = Vector{F}(zeros(nₜm))
+    diag_jl.volume_bwl_m3 = Vector{F}(zeros(nₜm))
+    diag_jl.area_m2_min_h = Vector{F}(zeros(nₜm))
+
     if diff >= 0               
         #Diagnostic at year 0 (and more if there is a spinup) 
         for i in 1:(diff*fac)+1
@@ -131,7 +160,8 @@ function diag(nₜm::Int64,fac::Int64,diff::Int64, SIA1D::Py,l_var::PyList{Any},
     return diag_jl
 end  
 
-function update_diag!(diag_jl::diag,SIA1D::Py,l_var::PyList{Any},dyn_spin_thick::Float64,j::Int)
+function update_diag!(diag_jl::diag{F},SIA1D::Py,
+    l_var::PyList{Any},dyn_spin_thick::F,j::I) where {F <: AbstractFloat, I <: Integer}
     diag_jl.volume_m3[j] = SIA1D.volume_m3
     diag_jl.area_m2[j] = SIA1D.area_m2
     diag_jl.length_m[j] = SIA1D.length_m
@@ -144,11 +174,42 @@ function update_diag!(diag_jl::diag,SIA1D::Py,l_var::PyList{Any},dyn_spin_thick:
     end 
 end 
 
-function geom_fl(do_geom::Bool,do_fl_diag::Bool,nₜ::Int64,nx::Int64,SIA1D::Py,diff::Int64,is_tidewater::Bool)
-    m = [zeros(Float64,nₜ,nx) for fl in SIA1D.fls]
-    v =[zeros(Float64,nₜ) for fl in SIA1D.fls]
-    geom_var = geom(m,m,v)
-    fl_var = fl_var= fl_diag(m,v,v)
+
+function geom(sects::Union{Vector{Matrix{Union{F,Py}}}, Nothing} = nothing,
+    widths::Union{Vector{Matrix{Union{F,Py}}}, Nothing} = nothing ,
+    buckets::Union{Vector{Vector{Union{F,Py}}}, Nothing}= nothing) where {F <: AbstractFloat}
+
+    geom_var= geom{Float64}(sects, widths, buckets)
+
+    return geom_var
+
+end
+
+function fl_diag(thick_fl::Union{Vector{Matrix{Union{F,Py}}}, Nothing} = nothing,
+    volume_bsl_fl::Union{Vector{Matrix{Union{F,Py}}}, Nothing} = nothing,
+    volume_bwl_fl::Union{Vector{Matrix{Union{F,Py}}}, Nothing} = nothing) where {F <: AbstractFloat, I <: Integer}
+
+    fl_var = fl_diag{Float64,Int64}(thick_fl,volume_bsl_fl,volume_bwl_fl)
+
+    return fl_var
+
+end 
+
+function initialize_geom_diag!(geom_var::geom{F},
+                            fl_var::fl_diag{F,I},
+                            do_geom::Bool,
+                            do_fl_diag::Bool,
+                            nₜ::I, nx::I, 
+                            SIA1D::Py, diff::I,
+                            is_tidewater::Bool) where {F <: AbstractFloat, I <: Integer}
+
+    geom_var.sects = [zeros(F,nₜ,nx) for fl in SIA1D.fls]
+    geom_var.widths = [zeros(F,nₜ,nx) for fl in SIA1D.fls]
+    geom_var.buckets = [zeros(F,nₜ) for fl in SIA1D.fls]
+    
+    fl_var.thick_fl = [zeros(F,nₜ,nx) for fl in SIA1D.fls]
+    fl_var.volume_bsl_fl = [zeros(F,nₜ) for fl in SIA1D.fls]
+    fl_var.volume_bwl_fl = [zeros(F,nₜ) for fl in SIA1D.fls]
 
     #Storage for geometry
     if do_geom || do_fl_diag
@@ -171,7 +232,8 @@ function geom_fl(do_geom::Bool,do_fl_diag::Bool,nₜ::Int64,nx::Int64,SIA1D::Py,
     return geom_var, fl_var
 end 
 
-function update_geom!(geom_var::geom,SIA1D::Py,is_tidewater::Bool,j::Int)
+function update_geom!(geom_var::geom{F},SIA1D::Py,
+    is_tidewater::Bool,j::I) where {F <: AbstractFloat, I <: Integer}
     for (s,w,b,fl) in zip(geom_var.sects,geom_var.widths,geom_var.buckets,SIA1D.fls)
         @views s[j,:] .= fl.section
         @views w[j,:] .= fl.widths_m
@@ -185,7 +247,7 @@ function update_geom!(geom_var::geom,SIA1D::Py,is_tidewater::Bool,j::Int)
     end 
 end 
 
-function update_fl_diag!(fl_var::fl_diag,SIA1D::Py,j::Int)
+function update_fl_diag!(fl_var::fl_diag{F,I},SIA1D::Py,j::I) where {F <: AbstractFloat, I <: Integer}
     for (t,vs,vw,fl) in zip(fl_var.thick_fl,fl_var.volume_bsl_fl,fl_var.volume_bwl_fl,SIA1D.fls)
         @views t[j,:] .= fl.thick
         vs[j] = fl.volume_bsl_m3
@@ -227,10 +289,12 @@ function SimulationParameters(
     return Simulation_Parameters
 end
 
-function initialize_sim_params!(Simulation_Parameters::SimulationParameters, SIA1D::Py, y0::Int64, y1::Int64, mb_step::String)
-    Simulation_Parameters.y₀ = pyconvert(Int64,y0)
-    Simulation_Parameters.y₀slf = pyconvert(Int64,SIA1D.y0)
-    Simulation_Parameters.y₁ = pyconvert(Int64,y1)
+function initialize_sim_params!(Simulation_Parameters::SimulationParameters{F,I},
+                             SIA1D::Py, y0::I, y1::I,
+                              mb_step::String) where {F <: AbstractFloat, I <: Integer}
+    Simulation_Parameters.y₀ = pyconvert(I,y0)
+    Simulation_Parameters.y₀slf = pyconvert(I,SIA1D.y0)
+    Simulation_Parameters.y₁ = pyconvert(I,y1)
     Simulation_Parameters.yr = Simulation_Parameters.y₀slf
     Simulation_Parameters.nₜ = Int(y1-y0) + 1
     Simulation_Parameters.diff = Simulation_Parameters.y₀slf - Simulation_Parameters.y₀
