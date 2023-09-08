@@ -96,7 +96,6 @@ function glacier_evolution_store(;SIA1D::Py,
     #Time parameters 
     sim_params::SimulationParameters = SimulationParameters()
     initialize_sim_params!(sim_params, SIA1D, y0, y1, mb_step)
-
     
     #### Initialize necessary storage structs     
     #Diagnostic
@@ -228,7 +227,7 @@ function glacier_evolution(;
 
     #Solving the problem         
     iceflow_prob = ODEProblem(SIA1D!,iceflow_model.H,sim_params.tspan,tstops=tstops,iceflow_model)
-    iceflow_sol = solve(iceflow_prob,solver,callback=cb_MB, tstops=tstops, reltol=reltol,save_everystep=false,dense=false)
+    solve(iceflow_prob,solver,callback=cb_MB, tstops=tstops, reltol=reltol,save_everystep=false,dense=false)
 
     return SIA1D
 
